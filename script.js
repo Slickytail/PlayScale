@@ -123,10 +123,30 @@ function createListeners() {
     const lpQParam = lp.Q;
 
     let lastOsc;
+    let timeout = -1;
     const playElement = document.getElementById("play-btn");
     playElement.addEventListener("click", () => {
+        // Kill the old oscillator
+        if (lastOsc) {
+            if (lastOsc.running)
+                lastOsc.stop();
+            lastOsc.disconnect(shaper);
+        }
+        // Create a new oscillator
+        let osc = audio.createOscillator();
+        osc.addEventListener("ended", () => osc.running = false);
+        osc.setPeriodicWave(synth);
+        osc.connect(shaper);
+        lastOsc = osc;
+
+        // Set UI state
+        let already_playing = playElement.classList.contains("playing");
+        playElement.classList.toggle("playing");
+        if (already_playing) {
+            return;
+        }
+        clearTimeout(timeout);
         // Create the scale
-        
         function getFreq(octave, semitones_in_scale) {
             // We're going to compute how many semitones off from A4 this is.
             // First, we compute how many semitones off from A4 the root note is.
@@ -159,24 +179,16 @@ function createListeners() {
         ups.push(top);
 
         let scale = ups.concat(downs);
-        console.log(scale);
 
         let bpm = bpmElement.valueAsNumber;
         let note_duration = 60 / bpm;
         let ramp = Math.max(note_duration/20, 0.05);
-        
-        // Kill the old oscillator
-        if (lastOsc) {
-            lastOsc.stop();
-            lastOsc.disconnect(shaper);
-        }
-        gainParam.cancelScheduledValues(0);
-        // Create a new oscillator
-        let osc = audio.createOscillator();
-        osc.setPeriodicWave(synth);
-        osc.connect(shaper);
 
         let freqParam = osc.frequency;
+        // Cancel all automation
+        gainParam.cancelScheduledValues(0);
+        lpFreqParam.cancelScheduledValues(0);
+        lpQParam.cancelScheduledValues(0);
         // Queue up the scale
         const startTime = audio.currentTime;
         for (let t = 0; t < scale.length; t++) {
@@ -193,8 +205,12 @@ function createListeners() {
         // Trail off last note
         gainParam.linearRampToValueAtTime(0.0, startTime + note_duration * (scale.length+0.5));
         // Play the scale
-        lastOsc = osc;
         osc.start();
+        osc.running = true;
+        timeout = setTimeout(() => {
+            osc.stop();
+            playElement.classList.remove("playing");
+        }, note_duration * (scale.length+0.5) * 1000);
     });
 }
 

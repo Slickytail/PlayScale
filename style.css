@@ -70,11 +70,24 @@ body {
     height: 1.4em;
 }
 #play-btn {
-    fill: var(--green);
     width: 100%;
     height: 100%;
     display: block;
     cursor: pointer;
+}
+.play-icon {
+    fill: var(--green);
+    opacity: 1;
+}
+.stop-icon {
+    fill: var(--orange);
+    opacity: 0;
+}
+#play-btn.playing .play-icon {
+    opacity: 0;
+}
+#play-btn.playing .stop-icon {
+    opacity: 1;
 }
 #bpm {
     width: 50px;
