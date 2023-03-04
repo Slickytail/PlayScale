@@ -19,8 +19,8 @@ const accidentals = [
 ];
 const directions = [
     {displayName: "Up", id: "up"},
-    {displayName: "Up And Down", id: "both"},
-    {displayName: "Down", id: "down"}
+    {displayName: "Down", id: "down"},
+    {displayName: "Both", id: "both"}
 ];
 // UI Code
 function createListeners() {
@@ -83,69 +83,69 @@ function createListeners() {
             directionElement.classList.add("accent-orange");
         directionElement.textContent = directions[selectedDirection].displayName;
     })
+    // Loop selection
+    const loopElement = document.getElementById("loop");
+    let selectedLoop = false;
+    loopElement.addEventListener("click", () => {
+        loopElement.classList.toggle("accent-green");
+        selectedLoop = !selectedLoop;
+
+        loopElement.textContent = selectedLoop ? "Loop" : "Once";
+    })
+    // Leadin
+    const delayElement = document.getElementById("leadin");
+    let selectedDelay = false;
+    delayElement.addEventListener("click", () => {
+        delayElement.classList.toggle("accent-green");
+        selectedDelay = !selectedDelay;
+
+        delayElement.textContent = selectedDelay ? "Leadin" : "Immediate";
+    })
+
     // Text fields
     const bpmElement = document.getElementById("bpm");
+    bpmElement.addEventListener("change", () =>
+        Tone.Transport.bpm.value = bpmElement.value
+    );
+
     const lengthElement = document.getElementById("octs");
-
-    // Set up Audio context
-    const audio = new AudioContext({latencyHint: "balanced"});
-
-    // Set basic overtones (of course, the higher ones should decrease faster over time)
-    //const overtones = Float32Array.from([0, 1, 0.6, 0.6, 0.7, 0.5, 0.2, 0.5, 0.1]);
-    const overtones = Float32Array.from([0, 0.5, 0.75, 1, 0.65, 0.6, 0.35, 0.6, 0.7, 0.6, 0.45, 0.52, 0.7, 0.55, 0.51]);
-    const sines = new Float32Array(overtones.length); // zeros
-    const synth = audio.createPeriodicWave(overtones, sines);
-    // Create waveshaper
-    const shaper_samples = Math.pow(2, 15);
-    const curve = new Float32Array(shaper_samples);
-    // Sigmoid shaper curve
-    const k = 10;
-    const deg = Math.PI / 180;
-    for (let i = 0; i < shaper_samples; i++) {
-        let input = i * 2 / shaper_samples - 1;
-        curve[i] = ( 3 + k ) * input * 20 * deg / ( Math.PI + k * Math.abs(input) );
-    }
-    const shaper = audio.createWaveShaper();
-    shaper.curve = curve;
-    shaper.oversample = '2x';
-    // Create a gain node
-    const gain = audio.createGain();
-    // Create lowpass filter node
-    const lp = audio.createBiquadFilter();
-    lp.type = "lowpass";
-    // Connect shaper -> lp -> gain -> output
-    shaper.connect(lp);
-    lp.connect(gain);
-    gain.connect(audio.destination);
-    // Get a handle to the gain and lp freq
-    const gainParam = gain.gain;
-    const lpFreqParam = lp.frequency;
-    const lpQParam = lp.Q;
-
-    let lastOsc;
-    let timeout = -1;
     const playElement = document.getElementById("play-btn");
-    playElement.addEventListener("click", () => {
-        // Kill the old oscillator
-        if (lastOsc) {
-            if (lastOsc.running)
-                lastOsc.stop();
-            lastOsc.disconnect(shaper);
-        }
-        // Create a new oscillator
-        let osc = audio.createOscillator();
-        osc.addEventListener("ended", () => osc.running = false);
-        osc.setPeriodicWave(synth);
-        osc.connect(shaper);
-        lastOsc = osc;
 
-        // Set UI state
-        let already_playing = playElement.classList.contains("playing");
-        playElement.classList.toggle("playing");
-        if (already_playing) {
+    // Use Piano sounds!
+    let samples_to_load = {};
+    ["C", "A"].forEach(n => {
+        for (let t = 1; t < 7; t++)
+            samples_to_load[n + t] = n + t + ".mp3"
+    });
+    const sampler = new Tone.Sampler({
+        urls: samples_to_load,
+        release: 1,
+        baseUrl: "https://tonejs.github.io/audio/salamander/",
+    }).toDestination();
+
+    // click for leadin
+    const click = new Tone.NoiseSynth({
+        volume: -15,
+        envelope: {
+            attack: 0.001,
+            decay: 0.1,
+            sustain: 0
+        }
+    }).toDestination();
+
+    //==== Audio Stuff =====
+    playElement.addEventListener("click", async () => {
+        // Make sure Tone is started
+        await Tone.start();
+        // Toggle the symbol of the Play element
+        let stopping = !playElement.classList.toggle("playing");
+        if (stopping) {
+            // kill the 
+            Tone.Transport.stop();
+            Tone.Transport.cancel();
             return;
         }
-        clearTimeout(timeout);
+
         // Create the scale
         function getFreq(octave, semitones_in_scale) {
             // We're going to compute how many semitones off from A4 this is.
@@ -177,40 +177,46 @@ function createListeners() {
         // Add top (bottom) note
         let top = getFreq(lengthElement.valueAsNumber, 0);
         ups.push(top);
-
         let scale = ups.concat(downs);
+        // When looping up and down, don't duplicate the bottom note.
+        if (selectedLoop && dir == "both")
+            scale.pop();
+            
+        const leadinPart = new Tone.Loop(((time) => {
+			click.triggerAttack(time);
+		}), "4n");
 
-        let bpm = bpmElement.valueAsNumber;
-        let note_duration = 60 / bpm;
-        let ramp = Math.max(note_duration/20, 0.05);
+        const scaleSequence = new Tone.Sequence((time, note) => {
+            sampler.triggerAttackRelease(note, "4n", time);
+        }, scale, "4n");
 
-        let freqParam = osc.frequency;
-        // Cancel all automation
-        gainParam.cancelScheduledValues(0);
-        lpFreqParam.cancelScheduledValues(0);
-        lpQParam.cancelScheduledValues(0);
-        // Queue up the scale
-        const startTime = audio.currentTime;
-        for (let t = 0; t < scale.length; t++) {
-            let onset = startTime + note_duration * t;
-            freqParam.setValueAtTime(scale[t], onset);
-            lpFreqParam.setValueAtTime(scale[t]*8, onset);
-            lpFreqParam.exponentialRampToValueAtTime(scale[t]*5, onset+note_duration*0.7);
-            lpQParam.setValueAtTime(2, onset);
-            lpQParam.exponentialRampToValueAtTime(0.5, onset + note_duration * 0.8);
-            gainParam.setValueAtTime(0.1, onset);
-            gainParam.linearRampToValueAtTime(1, onset + ramp);
-            gainParam.exponentialRampToValueAtTime(0.4, onset + note_duration * 0.9);
+        // Callback to reset the play button when finished
+        if (!(scaleSequence.loop = selectedLoop)) {
+            let total_beats = scale.length + selectedDelay*4;
+            let measures = Math.floor(total_beats / 4);
+            let extra_beats = total_beats % 4;
+            // schedule to stop
+            Tone.Transport.schedule(() => {
+                playElement.classList.remove("playing");
+                Tone.Transport.stop();
+                Tone.Transport.cancel();
+            }, `${measures}:${extra_beats}:8`);
         }
-        // Trail off last note
-        gainParam.linearRampToValueAtTime(0.0, startTime + note_duration * (scale.length+0.5));
-        // Play the scale
-        osc.start();
-        osc.running = true;
-        timeout = setTimeout(() => {
-            osc.stop();
-            playElement.classList.remove("playing");
-        }, note_duration * (scale.length+0.5) * 1000);
+
+        if (selectedDelay) {
+            leadinPart.start(0);
+            leadinPart.stop("1m");
+            scaleSequence.start("1m");
+        }
+        else
+            scaleSequence.start(0);
+
+        Tone.Transport.start();
+        // When the transport is stopped, dispose of the sequences
+        Tone.Transport.once("stop", () => {
+            leadinPart.dispose();
+            scaleSequence.dispose();
+        });
     });
 }
 
